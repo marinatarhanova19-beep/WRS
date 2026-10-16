@@ -1,0 +1,360 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if error %}
+<div class="alert err">{{ error }}</div>
+{% endif %}
+{% if job_error %}
+<div class="alert err">{{ job_error }}</div>
+{% endif %}
+{% if job_running %}
+<div class="alert ok" id="jobBanner">
+  ⏳ Идёт обработка файлов… Страница обновится автоматически.
+</div>
+<meta http-equiv="refresh" content="3">
+{% endif %}
+
+{# ── Upload ── #}
+<section class="card" id="upload">
+  <div class="section-head">
+    <span class="step-badge">↑</span>
+    Загрузка файлов
+  </div>
+  <p class="hint">
+    WRS + смены обязательны. Адресную книгу — при первом запуске или для обновления{% if ab_count %} (сейчас {{ ab_count }}){% endif %}{% if schedule_count %} · график дворников: {{ schedule_count }}{% endif %}
+  </p>
+
+  <form action="/process" method="post" enctype="multipart/form-data" id="mainForm">
+    <div class="file-row">
+      <label class="field-label">1. Адресная книга</label>
+      <label class="file-pick" data-pick>
+        <span class="fp-icon">📒</span>
+        <span class="fp-body">
+          <span class="fp-title" data-title>Выберите файл</span>
+          <span class="fp-meta" data-meta>{% if ab_count %}Сейчас в базе: {{ ab_count }}{% if ab_updated %} · {{ ab_updated }}{% endif %}{% else %}Колонки: Адрес магазина, Менеджер{% endif %}</span>
+        </span>
+        <input type="file" name="file_ab" accept=".xlsx,.xls" id="file_ab">
+      </label>
+    </div>
+
+    <div class="file-row">
+      <label class="field-label">2. WRS — авторизация в магазине</label>
+      <label class="file-pick" data-pick>
+        <span class="fp-icon">🏪</span>
+        <span class="fp-body">
+          <span class="fp-title" data-title>Выберите файл</span>
+          <span class="fp-meta" data-meta>Адрес объекта, Статус, Тип работ</span>
+        </span>
+        <input type="file" name="file_wrs" accept=".xlsx,.xls" id="file_wrs" required>
+      </label>
+    </div>
+
+    <div class="file-row">
+      <label class="field-label">3. Смены</label>
+      <label class="file-pick" data-pick>
+        <span class="fp-icon">⏱</span>
+        <span class="fp-body">
+          <span class="fp-title" data-title>Выберите файл</span>
+          <span class="fp-meta" data-meta>Адрес, Тип работы, Длительность · короткие + прилегающая</span>
+        </span>
+        <input type="file" name="file_shifts" accept=".xlsx,.xls" id="file_shifts" required>
+      </label>
+    </div>
+
+    <div class="file-row">
+      <label class="field-label">График дворников <span style="font-weight:500;color:var(--muted)">(необязательно)</span></label>
+      <label class="file-pick" data-pick>
+        <span class="fp-icon">🧹</span>
+        <span class="fp-body">
+          <span class="fp-title" data-title>{% if schedule_count %}Обновить график{% else %}Выберите файл{% endif %}</span>
+          <span class="fp-meta" data-meta>{% if schedule_count %}Сохранено: {{ schedule_count }} магазинов{% else %}Адрес, График{% endif %}</span>
+        </span>
+        <input type="file" name="file_dvornik" accept=".xlsx,.xls">
+      </label>
+    </div>
+
+    <button type="submit" class="btn btn-block" id="runBtn">Сформировать отчёты</button>
+  </form>
+</section>
+
+{% if has_results %}
+
+{% if generated_at or report_date %}
+<div class="alert ok" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;">
+  <span>
+    {% if report_date %}Отчёт за <strong>{{ report_date }}</strong>{% endif %}
+    {% if generated_at %} · сформирован <strong>{{ generated_at }}</strong> (МСК){% endif %}
+  </span>
+  {% if has_excel %}
+  <a class="btn btn-sm" href="/export/shifts" style="flex:0;">⬇ Excel смены</a>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="kpi-row">
+  <div class="kpi">
+    <div class="label">Магазины</div>
+    <div class="value">{{ kpi.shops if kpi.shops is defined else "—" }}</div>
+  </div>
+  <div class="kpi err">
+    <div class="label">Не авт.</div>
+    <div class="value">{{ kpi.nonauth if kpi.nonauth is defined else "—" }}</div>
+  </div>
+  <div class="kpi warn">
+    <div class="label">Прилег.</div>
+    <div class="value">{{ kpi.adj if kpi.adj is defined else "—" }}</div>
+  </div>
+</div>
+
+{# ── 1. Inside store ── #}
+<section class="section" id="sec-wrs">
+  <div class="section-head">
+    <span class="step-badge red">1</span>
+    Авторизация в магазине + короткие смены
+  </div>
+
+  {% if wrs_report %}
+  <div class="report" id="rep-wrs">{{ wrs_report }}</div>
+  <div class="btn-row">
+    <button type="button" class="btn btn-secondary btn-sm" onclick="copyText(document.getElementById('rep-wrs').innerText)">
+      Копировать без SL
+    </button>
+    <button type="button" class="btn btn-ghost btn-sm" onclick="copyText({{ wrs_report_sl|tojson }})">
+      Копировать с SL
+    </button>
+  </div>
+  {% else %}
+  <p class="hint">Нет данных WRS</p>
+  {% endif %}
+
+  {% if wrs_mgr_rows %}
+  <div class="card-title" style="margin-top:18px;">По менеджерам</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Менеджер</th>
+          <th class="num">Всего</th>
+          <th class="num">Не авт.</th>
+          <th class="num">Прилег.</th>
+          <th class="num">SL</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in wrs_mgr_rows %}
+        <tr>
+          <td>{{ r.manager }}</td>
+          <td class="num">{{ r.total }}</td>
+          <td class="num">{{ r.non_auth }}</td>
+          <td class="num">{{ r.adj_only }}</td>
+          <td class="num">
+            {% set pct = (r.sl * 100) if r.sl is defined else 100 %}
+            <span class="badge {% if pct >= 95 %}ok{% elif pct >= 85 %}warn{% else %}err{% endif %}">{{ r.sl_percent }}</span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if wrs_region_rows %}
+  <div class="card-title" style="margin-top:16px;">Регионы</div>
+  {% for r in wrs_region_rows %}
+  <div style="margin-bottom:12px;">
+    <div style="display:flex;justify-content:space-between;gap:8px;">
+      <strong>{{ r.region }}</strong>
+      <span style="font-weight:700;">{{ r.sl_percent }}</span>
+    </div>
+    {% set pct = (r.sl * 100) if r.sl is defined else 0 %}
+    <div class="sl-bar {% if pct < 85 %}err{% elif pct < 95 %}warn{% endif %}">
+      <span style="width:{{ [pct,100]|min }}%"></span>
+    </div>
+  </div>
+  {% endfor %}
+  {% endif %}
+</section>
+
+{# ── 2. Dvornik ── #}
+<section class="section" id="sec-dv">
+  <div class="section-head">
+    <span class="step-badge green">2</span>
+    Не авторизации дворника
+  </div>
+
+  {% if dv_day %}
+  <p class="hint">
+    День: <strong>{{ dv_day }}</strong>
+    · по графику {{ dv_n_total if dv_n_total is not none else "—" }}
+    · открыли {{ dv_n_worked if dv_n_worked is not none else "—" }}
+    · не авт. {{ dv_n_nonauth if dv_n_nonauth is not none else "—" }}
+  </p>
+  {% endif %}
+
+  {% if dv_report %}
+  <div class="report" id="rep-dv">{{ dv_report }}</div>
+  <div class="btn-row">
+    <button type="button" class="btn btn-secondary btn-sm" onclick="copyText(document.getElementById('rep-dv').innerText)">
+      Копировать без SL
+    </button>
+    <button type="button" class="btn btn-ghost btn-sm" onclick="copyText({{ (dv_report_sl or dv_report)|tojson }})">
+      Копировать с SL
+    </button>
+  </div>
+  {% elif not schedule_count %}
+  <p class="hint">Загрузите график дворников в форме выше и снова сформируйте отчёты.</p>
+  {% else %}
+  <p class="hint">Нет данных для сверки прилегающей.</p>
+  {% endif %}
+
+  {% if dv_nonauth %}
+  <div class="card-title" style="margin-top:16px;">Список ({{ dv_nonauth|length }})</div>
+  <ul class="list">
+    {% for r in dv_nonauth %}
+    <li>
+      <div class="title">{{ r.address_short or r.address }}</div>
+      <div class="meta">{{ r.manager }} · {{ r.schedule }}</div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% elif dv_n_total is not none and dv_n_total > 0 and not dv_nonauth %}
+  <div class="alert ok" style="margin-top:12px;">Все магазины по графику открыли прилегающую.</div>
+  {% endif %}
+</section>
+
+{# ── 3. Short shifts ── #}
+<section class="section" id="sec-short">
+  <div class="section-head">
+    <span class="step-badge amber">3</span>
+    Короткие смены &lt; 3 ч
+  </div>
+  {% if short_ctx and short_ctx.report_date %}
+  <p class="hint">Дата из файла: <strong>{{ short_ctx.report_date }}</strong></p>
+  {% endif %}
+  {% if has_excel %}
+  <div class="btn-row" style="margin-bottom:10px;">
+    <a class="btn btn-block" href="/export/shifts">Скачать Excel: смены по менеджерам</a>
+  </div>
+  <p class="hint">Лист «Сводка» + отдельный лист на каждого менеджера: все смены за день, не авт., прилегающая. Короткие &lt; 3 ч подсвечены.</p>
+  {% endif %}
+  {% if short_rows %}
+  <ul class="list">
+    {% for r in short_rows %}
+    <li>
+      <div class="title">{{ r.address }}</div>
+      <div class="meta">{{ r.manager }} · {{ r.duration }} · смен: {{ r.shifts_count }}</div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="hint">Коротких смен нет или файл смен не обработан.</p>
+  {% endif %}
+</section>
+
+{# ── 4. Corrections ── #}
+<section class="section" id="sec-corr">
+  <div class="section-head">
+    <span class="step-badge">4</span>
+    Ручные корректировки SL
+  </div>
+  <p class="hint">Н/к уборка (−) · Реконструкция (+) · Тех. (+). После «Применить» блок 1 пересчитается.</p>
+  {% for it in corr_items %}
+  <div class="divider"></div>
+  <div style="font-weight:700;">{{ it.manager }}</div>
+  <div class="meta" style="color:var(--muted);font-size:12px;">{{ it.region }} · магазинов: {{ it.total }} · SL: {{ it.sl_percent }}</div>
+  <form action="/corrections/save" method="post" style="margin-top:10px;">
+    <input type="hidden" name="manager" value="{{ it.manager }}">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+      <div>
+        <label class="field-label">Н/к</label>
+        <input type="number" name="q" min="0" max="50" value="{{ it.q }}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:10px;font:inherit;">
+      </div>
+      <div>
+        <label class="field-label">Реконстр.</label>
+        <input type="number" name="nr" min="0" max="50" value="{{ it.nr }}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:10px;font:inherit;">
+      </div>
+      <div>
+        <label class="field-label">Тех.</label>
+        <input type="number" name="tech" min="0" max="50" value="{{ it.tech }}" style="width:100%;padding:10px;border:1px solid var(--border);border-radius:10px;font:inherit;">
+      </div>
+    </div>
+    <button type="submit" class="btn btn-secondary btn-sm" style="margin-top:8px;">Применить</button>
+  </form>
+  {% else %}
+  <p class="hint">Список менеджеров пуст (settings.json).</p>
+  {% endfor %}
+</section>
+
+<div style="text-align:center;margin:8px 0 20px;">
+  <a class="btn btn-ghost btn-sm" href="#upload">↑ К загрузке</a>
+</div>
+
+{% else %}
+<div class="empty">Выберите три файла и нажмите «Сформировать отчёты»</div>
+{% endif %}
+
+<script>
+(function() {
+  document.querySelectorAll('[data-pick]').forEach(function(box) {
+    var input = box.querySelector('input[type=file]');
+    var title = box.querySelector('[data-title]');
+    var meta = box.querySelector('[data-meta]');
+    var defTitle = title.textContent;
+    var defMeta = meta.textContent;
+    input.addEventListener('change', function() {
+      if (input.files && input.files[0]) {
+        var f = input.files[0];
+        var mb = (f.size / 1024 / 1024);
+        title.textContent = f.name;
+        meta.textContent = 'Загружен · ' + (mb >= 0.1 ? mb.toFixed(1) + ' МБ' : Math.round(f.size / 1024) + ' КБ');
+        box.classList.add('has-file');
+        toast('Файл выбран');
+      } else {
+        title.textContent = defTitle;
+        meta.textContent = defMeta;
+        box.classList.remove('has-file');
+      }
+    });
+  });
+  // iOS/Safari: allow selecting the same file again
+  document.querySelectorAll('input[type=file]').forEach(function(inp) {
+    inp.addEventListener('click', function() { inp.value = ''; });
+  });
+  var form = document.getElementById('mainForm');
+  if (form) {
+    form.addEventListener('submit', function(ev) {
+      var abCount = {{ ab_count|int }};
+      var ab = document.getElementById('file_ab');
+      var wrs = document.getElementById('file_wrs');
+      var sh = document.getElementById('file_shifts');
+      if (abCount < 1 && (!ab.files || !ab.files.length)) {
+        ev.preventDefault();
+        toast('Сначала загрузите адресную книгу');
+        return;
+      }
+      if (!wrs.files || !wrs.files.length) {
+        ev.preventDefault();
+        toast('Нужен файл WRS');
+        return;
+      }
+      if (!sh.files || !sh.files.length) {
+        ev.preventDefault();
+        toast('Нужен файл смен');
+        return;
+      }
+      var b = document.getElementById('runBtn');
+      if (b) { b.disabled = true; b.textContent = 'Обработка…'; }
+    });
+  }
+  {% if job_running %}
+  setTimeout(function(){ location.reload(); }, 3000);
+  {% endif %}
+  {% if has_results %}
+  setTimeout(function() {
+    var el = document.getElementById('sec-wrs');
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 120);
+  {% endif %}
+})();
+</script>
+{% endblock %}
